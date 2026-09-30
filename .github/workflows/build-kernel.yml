@@ -1,0 +1,125 @@
+name: Build Pixel 8 kernel (KernelSU-Next + Droidspaces)
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_branch:
+        description: "Pixel kernel manifest branch (must match the Android release on your phone)"
+        required: true
+        default: "android-gs-shusky-6.1-android16"
+      ksu_ref:
+        description: "KernelSU-Next setup.sh argument: blank = latest release, or dev / stable / vX.Y.Z"
+        required: false
+        default: ""
+      strict_kmi:
+        description: "Keep KMI symbol-list strict mode (untick if the build fails on KMI/ABI checks)"
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      # Free runners only have ~14 GB free; this merges / and /mnt into one big volume.
+      # Must run BEFORE checkout because it remounts the workspace.
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 4096
+          swap-size-mb: 8192
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+
+      - name: Checkout this repo (configs + patches)
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl python3 rsync
+          mkdir -p ~/bin
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o ~/bin/repo
+          chmod +x ~/bin/repo
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          git config --global user.name  "github-actions"
+          git config --global user.email "actions@github.com"
+          # Ubuntu 24.04 blocks unprivileged user namespaces, which breaks Bazel's sandbox
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          df -h "$GITHUB_WORKSPACE"
+
+      - name: Sync Pixel kernel source
+        run: |
+          mkdir -p kernel && cd kernel
+          repo init --depth=1 -u https://android.googlesource.com/kernel/manifest \
+            -b "${{ inputs.manifest_branch }}"
+          for i in 1 2 3; do
+            repo sync -c --no-tags --no-clone-bundle -j"$(nproc)" && break
+            echo "repo sync failed (attempt $i), retrying..."; sleep 30
+          done
+          ls
+          echo "---- device.bazelrc files ----"
+          find private -name device.bazelrc -exec sh -c 'echo "== $1"; cat "$1"' _ {} \;
+
+      - name: Apply extra patches (e.g. Droidspaces GKI SYSVIPC kABI fix)
+        run: |
+          cd kernel/aosp
+          shopt -s nullglob
+          for p in "$GITHUB_WORKSPACE"/overlay/patches/*.patch; do
+            echo "Applying $(basename "$p")"
+            patch -p1 --forward < "$p"
+          done
+
+      - name: Add KernelSU-Next
+        run: |
+          cd kernel/aosp
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
+            | bash -s ${{ inputs.ksu_ref }}
+
+      - name: Apply Droidspaces + KSU config to gki_defconfig
+        run: |
+          DEFCONFIG=kernel/aosp/arch/arm64/configs/gki_defconfig
+          {
+            echo ""
+            echo "# ---- KernelSU-Next ----"
+            echo "CONFIG_KSU=y"
+            echo "# ---- Droidspaces ----"
+            grep -v '^\s*$' "$GITHUB_WORKSPACE/overlay/configs/droidspaces.config"
+          } >> "$DEFCONFIG"
+          tail -n 60 "$DEFCONFIG"
+
+      - name: Build (Kleaf)
+        run: |
+          cd kernel
+          EXTRA=""
+          if [ "${{ inputs.strict_kmi }}" != "true" ]; then
+            EXTRA="--nokmi_symbol_list_strict_mode"
+          fi
+          tools/bazel run \
+            --config=shusky \
+            --config=fast \
+            --config=no_download_gki \
+            --config=use_source_tree_aosp \
+            --lto=thin \
+            $EXTRA \
+            //private/devices/google/shusky:zuma_shusky_dist
+          echo "---- dist output ----"
+          ls -lh out/shusky/dist
+
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel8-kernel-${{ github.run_number }}
+          if-no-files-found: error
+          path: |
+            kernel/out/shusky/dist/boot.img
+            kernel/out/shusky/dist/dtbo.img
+            kernel/out/shusky/dist/vendor_kernel_boot.img
+            kernel/out/shusky/dist/vendor_dlkm.img
+            kernel/out/shusky/dist/system_dlkm.img

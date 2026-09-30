@@ -104,8 +104,8 @@ jobs:
           tools/bazel run \
             --config=shusky \
             --config=fast \
-            --config=no_download_gki \
             --config=use_source_tree_aosp \
+            --download_prebuilt_gki_fips140=false \
             --lto=thin \
             $EXTRA \
             //private/devices/google/shusky:zuma_shusky_dist

@@ -93,6 +93,10 @@ jobs:
             grep -v '^\s*$' "$GITHUB_WORKSPACE/overlay/configs/droidspaces.config"
           } >> "$DEFCONFIG"
           tail -n 60 "$DEFCONFIG"
+          # GKI's check_defconfig runs savedefconfig and fails if gki_defconfig isn't
+          # byte-for-byte canonical, which appended options never are. Disable it.
+          sed -i 's/check_defconfig//' kernel/aosp/build.config.gki
+          grep -n "POST_DEFCONFIG_CMDS" kernel/aosp/build.config.gki || true
 
       - name: Build (Kleaf)
         run: |

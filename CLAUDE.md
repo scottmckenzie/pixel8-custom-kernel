@@ -8,6 +8,13 @@ Both devices' `android16` 6.1 branches build from the same `kernel/common` commi
 and `patches/` are shared. Only the values set in the workflow's "Resolve device settings" step
 differ: Kleaf `--config`, dist target, and dist dir.
 
+`kernel_source` chooses which manifest to use:
+- `google`: AOSP `kernel/manifest`, with the kernel in `aosp/`.
+- `lineage`: `LineageOS/android_kernel_google_gs-6.1_manifest`, used for phones running LineageOS.
+  Its default branch, `lineage-24.0`, is Android 17. The kernel is in `common/gki/`, pinned to a GKI tag.
+  Lineage defaults to a signed prebuilt GKI, so the workflow passes `--kernel_package=gki --nouse_prebuilt_kernel`.
+  Without those flags, KernelSU and the config changes are silently dropped.
+
 ## Layout
 - `.github/workflows/build-kernel.yml` is the whole build pipeline (repo sync → patches → KernelSU-Next → defconfig → Kleaf → upload images).
 - `configs/droidspaces.config` holds Kconfig lines appended verbatim to `kernel/aosp/arch/arm64/configs/gki_defconfig`.
@@ -15,10 +22,10 @@ differ: Kleaf `--config`, dist target, and dist dir.
 
 ## Building
 - Builds run only on GitHub Actions; there is no local build setup. Trigger with
-  `gh workflow run build-kernel.yml -f device=<shusky|pantah> [-f manifest_branch=...] [-f ksu_ref=...] [-f strict_kmi=false]`,
+  `gh workflow run build-kernel.yml -f device=<shusky|pantah> [-f kernel_source=lineage] [-f manifest_branch=...] [-f ksu_ref=...] [-f strict_kmi=false]`,
   and check runs with `gh run list` / `gh run view --log-failed`.
 - `manifest_branch` must match the Android release on the phone. If it's blank, it defaults to
-  `android-gs-<device>-6.1-android16`. Pre-Android-16 pantah branches use 5.10, which the 6.1 patches don't fit.
+  `android-gs-<device>-6.1-android16` (google) or `lineage-24.0` (lineage). Pre-Android-16 pantah branches use 5.10, which the 6.1 patches don't fit.
 - Outputs are uploaded as artifacts: boot, dtbo, vendor_kernel_boot, vendor_dlkm, system_dlkm images.
 
 ## Gotchas

@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Claude local state
+.claude/hooks/audit.log
+.claude/settings.local.json
+.claude/session
+
+# Build artifacts
+*.img
+*.zip
+payload.bin
+
+# Local kernel sync
+/kernel/
+/overlay/
+
+# Editor files
+*.swp
+*~
+.vscode/
+.idea/

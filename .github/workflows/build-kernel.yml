@@ -8,8 +8,13 @@ on:
         type: choice
         options: [shusky, pantah]
         default: shusky
+      kernel_source:
+        description: "google = AOSP Pixel kernel manifest; lineage = LineageOS gs-6.1 kernel manifest (for phones running LineageOS)"
+        type: choice
+        options: [google, lineage]
+        default: google
       manifest_branch:
-        description: "Pixel kernel manifest branch (must match the Android release on your phone); blank = android-gs-<device>-6.1-android16"
+        description: "Manifest branch (must match the Android release on your phone); blank = android-gs-<device>-6.1-android16 (google) or lineage-24.0 (lineage)"
         required: false
         default: ""
       ksu_ref:
@@ -28,6 +33,8 @@ jobs:
 
     steps:
       # Per-device values, taken from private/devices/google/<device>/BUILD.bazel.
+      # Per-source values: Google's tree keeps the kernel in aosp/; Lineage's keeps it in
+      # common/gki/ and defaults to a signed prebuilt GKI, so force a source build there.
       - name: Resolve device settings
         run: |
           case "${{ inputs.device }}" in
@@ -35,11 +42,29 @@ jobs:
             pantah) SOC=gs201 ;;
             *) echo "Unknown device: ${{ inputs.device }}"; exit 1 ;;
           esac
+          case "${{ inputs.kernel_source }}" in
+            google)
+              MANIFEST_URL=https://android.googlesource.com/kernel/manifest
+              DEFAULT_BRANCH="android-gs-${{ inputs.device }}-6.1-android16"
+              KERNEL_DIR=kernel/aosp
+              SOURCE_FLAGS="--config=use_source_tree_aosp --download_prebuilt_gki_fips140=false"
+              ;;
+            lineage)
+              MANIFEST_URL=https://github.com/LineageOS/android_kernel_google_gs-6.1_manifest
+              DEFAULT_BRANCH=lineage-24.0
+              KERNEL_DIR=kernel/common/gki
+              SOURCE_FLAGS="--kernel_package=gki --nouse_prebuilt_kernel --nouse_prebuilt_fips140"
+              ;;
+            *) echo "Unknown kernel_source: ${{ inputs.kernel_source }}"; exit 1 ;;
+          esac
           BRANCH="${{ inputs.manifest_branch }}"
-          [ -n "$BRANCH" ] || BRANCH="android-gs-${{ inputs.device }}-6.1-android16"
+          [ -n "$BRANCH" ] || BRANCH="$DEFAULT_BRANCH"
           {
             echo "DEVICE=${{ inputs.device }}"
+            echo "MANIFEST_URL=$MANIFEST_URL"
             echo "MANIFEST_BRANCH=$BRANCH"
+            echo "KERNEL_DIR=$KERNEL_DIR"
+            echo "SOURCE_FLAGS=$SOURCE_FLAGS"
             echo "DIST_TARGET=//private/devices/google/${{ inputs.device }}:${SOC}_${{ inputs.device }}_dist"
             echo "DIST_DIR=kernel/out/${{ inputs.device }}/dist"
           } | tee -a "$GITHUB_ENV"
@@ -79,8 +104,7 @@ jobs:
       - name: Sync Pixel kernel source
         run: |
           mkdir -p kernel && cd kernel
-          repo init --depth=1 -u https://android.googlesource.com/kernel/manifest \
-            -b "$MANIFEST_BRANCH"
+          repo init --depth=1 -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
           for i in 1 2 3; do
             repo sync -c --no-tags --no-clone-bundle -j"$(nproc)" && break
             echo "repo sync failed (attempt $i), retrying..."; sleep 30
@@ -91,7 +115,7 @@ jobs:
 
       - name: Apply extra patches (e.g. Droidspaces GKI SYSVIPC kABI fix)
         run: |
-          cd kernel/aosp
+          cd "$KERNEL_DIR"
           shopt -s nullglob
           for p in "$GITHUB_WORKSPACE"/overlay/patches/*.patch; do
             echo "Applying $(basename "$p")"
@@ -100,13 +124,13 @@ jobs:
 
       - name: Add KernelSU-Next
         run: |
-          cd kernel/aosp
+          cd "$KERNEL_DIR"
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
             | bash -s ${{ inputs.ksu_ref }}
 
       - name: Apply Droidspaces + KSU config to gki_defconfig
         run: |
-          DEFCONFIG=kernel/aosp/arch/arm64/configs/gki_defconfig
+          DEFCONFIG="$KERNEL_DIR/arch/arm64/configs/gki_defconfig"
           {
             echo ""
             echo "# ---- KernelSU-Next ----"
@@ -117,8 +141,8 @@ jobs:
           tail -n 60 "$DEFCONFIG"
           # GKI's check_defconfig runs savedefconfig and fails if gki_defconfig isn't
           # byte-for-byte canonical, which appended options never are. Disable it.
-          sed -i 's/check_defconfig//' kernel/aosp/build.config.gki
-          grep -n "POST_DEFCONFIG_CMDS" kernel/aosp/build.config.gki || true
+          sed -i 's/check_defconfig//' "$KERNEL_DIR/build.config.gki"
+          grep -n "POST_DEFCONFIG_CMDS" "$KERNEL_DIR/build.config.gki" || true
 
       - name: Build (Kleaf)
         run: |
@@ -130,8 +154,7 @@ jobs:
           tools/bazel run \
             --config="$DEVICE" \
             --config=fast \
-            --config=use_source_tree_aosp \
-            --download_prebuilt_gki_fips140=false \
+            $SOURCE_FLAGS \
             --lto=thin \
             $EXTRA \
             "$DIST_TARGET"
@@ -141,7 +164,7 @@ jobs:
       - name: Upload images
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.device }}-kernel-${{ github.run_number }}
+          name: ${{ inputs.device }}-${{ inputs.kernel_source }}-kernel-${{ github.run_number }}
           if-no-files-found: error
           path: |
             ${{ env.DIST_DIR }}/boot.img

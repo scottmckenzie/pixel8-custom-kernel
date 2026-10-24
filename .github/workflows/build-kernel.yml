@@ -1,12 +1,17 @@
-name: Build Pixel 8 kernel (KernelSU-Next + Droidspaces)
+name: Build Pixel kernel (KernelSU-Next + Droidspaces)
 
 on:
   workflow_dispatch:
     inputs:
+      device:
+        description: "Device: shusky = Pixel 8 / 8 Pro, pantah = Pixel 7 / 7 Pro"
+        type: choice
+        options: [shusky, pantah]
+        default: shusky
       manifest_branch:
-        description: "Pixel kernel manifest branch (must match the Android release on your phone)"
-        required: true
-        default: "android-gs-shusky-6.1-android16"
+        description: "Pixel kernel manifest branch (must match the Android release on your phone); blank = android-gs-<device>-6.1-android16"
+        required: false
+        default: ""
       ksu_ref:
         description: "KernelSU-Next setup.sh argument: blank = latest release, or dev / stable / vX.Y.Z"
         required: false
@@ -22,6 +27,23 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      # Per-device values, taken from private/devices/google/<device>/BUILD.bazel.
+      - name: Resolve device settings
+        run: |
+          case "${{ inputs.device }}" in
+            shusky) SOC=zuma ;;
+            pantah) SOC=gs201 ;;
+            *) echo "Unknown device: ${{ inputs.device }}"; exit 1 ;;
+          esac
+          BRANCH="${{ inputs.manifest_branch }}"
+          [ -n "$BRANCH" ] || BRANCH="android-gs-${{ inputs.device }}-6.1-android16"
+          {
+            echo "DEVICE=${{ inputs.device }}"
+            echo "MANIFEST_BRANCH=$BRANCH"
+            echo "DIST_TARGET=//private/devices/google/${{ inputs.device }}:${SOC}_${{ inputs.device }}_dist"
+            echo "DIST_DIR=kernel/out/${{ inputs.device }}/dist"
+          } | tee -a "$GITHUB_ENV"
+
       # Free runners only have ~14 GB free; this merges / and /mnt into one big volume.
       # Must run BEFORE checkout because it remounts the workspace.
       - name: Maximize build space
@@ -58,7 +80,7 @@ jobs:
         run: |
           mkdir -p kernel && cd kernel
           repo init --depth=1 -u https://android.googlesource.com/kernel/manifest \
-            -b "${{ inputs.manifest_branch }}"
+            -b "$MANIFEST_BRANCH"
           for i in 1 2 3; do
             repo sync -c --no-tags --no-clone-bundle -j"$(nproc)" && break
             echo "repo sync failed (attempt $i), retrying..."; sleep 30
@@ -106,24 +128,24 @@ jobs:
             EXTRA="--nokmi_symbol_list_strict_mode"
           fi
           tools/bazel run \
-            --config=shusky \
+            --config="$DEVICE" \
             --config=fast \
             --config=use_source_tree_aosp \
             --download_prebuilt_gki_fips140=false \
             --lto=thin \
             $EXTRA \
-            //private/devices/google/shusky:zuma_shusky_dist
+            "$DIST_TARGET"
           echo "---- dist output ----"
-          ls -lh out/shusky/dist
+          ls -lh "$GITHUB_WORKSPACE/$DIST_DIR"
 
       - name: Upload images
         uses: actions/upload-artifact@v4
         with:
-          name: pixel8-kernel-${{ github.run_number }}
+          name: ${{ inputs.device }}-kernel-${{ github.run_number }}
           if-no-files-found: error
           path: |
-            kernel/out/shusky/dist/boot.img
-            kernel/out/shusky/dist/dtbo.img
-            kernel/out/shusky/dist/vendor_kernel_boot.img
-            kernel/out/shusky/dist/vendor_dlkm.img
-            kernel/out/shusky/dist/system_dlkm.img
+            ${{ env.DIST_DIR }}/boot.img
+            ${{ env.DIST_DIR }}/dtbo.img
+            ${{ env.DIST_DIR }}/vendor_kernel_boot.img
+            ${{ env.DIST_DIR }}/vendor_dlkm.img
+            ${{ env.DIST_DIR }}/system_dlkm.img

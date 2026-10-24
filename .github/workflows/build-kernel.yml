@@ -147,6 +147,11 @@ jobs:
       - name: Build (Kleaf)
         run: |
           cd kernel
+          # Lineage's tools/build_dist.sh links private/google-modules/bms to .bms before
+          # building; we call tools/bazel directly, so create that link ourselves.
+          if [ -d private/google-modules/.bms ] && [ ! -e private/google-modules/bms ]; then
+            ln -s .bms private/google-modules/bms
+          fi
           EXTRA=""
           if [ "${{ inputs.strict_kmi }}" != "true" ]; then
             EXTRA="--nokmi_symbol_list_strict_mode"

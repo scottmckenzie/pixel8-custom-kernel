@@ -12,7 +12,7 @@ This overlay repo builds custom Google Pixel GKI kernels (Linux 6.1, Android 16)
 The repository consists of:
 
 - `.github/workflows/build-kernel.yml` - the complete build pipeline (repo sync -> patch apply -> KernelSU-Next add -> config append -> Kleaf/Bazel build -> upload images).
-- `configs/droidspaces.config` - Kconfig lines that are appended to the default `gki_defconfig` (namespaces, `CONFIG_SYSVIPC`, cgroup device, devtmpfs, seccomp, overlayfs, veth, bridge, user namespaces).
+- `configs/droidspaces.config` - Kconfig lines that are appended to the default `gki_defconfig` (namespaces, `CONFIG_SYSVIPC`, cgroup device, devtmpfs, seccomp, overlayfs, veth, bridge, user namespaces), plus Droidspaces' optional features (macvlan, IPv6 NAT/masquerade, CFS bandwidth, PID cgroup).
 - `patches/` - kernel patches; only files ending in `.patch` are applied. Currently a SYSVIPC kABI fix that lets `CONFIG_SYSVIPC` be enabled without breaking the GKI kernel ABI.
 
 ## Building
